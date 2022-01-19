@@ -1,0 +1,117 @@
+---
+title: "Autophagy_Genes"
+author: "BM"
+date: "4/12/2021"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## Transcripts in BD2HAN Rat RNAseq Data
+
+```{r include=FALSE}
+print(getwd())
+load("../data/BD2HAN_2_RNAseqR/RData/BD2HAN_2.DE_ready.RData")
+load("../data/Tp53/BD2HAN_2.so.RData")
+
+sor <- so$obs_raw %>%
+       dplyr::mutate(ensembl_transcript_id = stringr::str_split(target_id, "\\.", simplify = TRUE)[, 1]) %>%
+       dplyr::left_join(., anno_tb, by = c("ensembl_transcript_id" = "target_id"))
+sot <- so$obs_raw_tpm$long
+atg_goe <- dplyr::filter(.data = sor,
+                         stringr::str_detect(external_gene_name, "Atg")) %>%
+           dplyr::select(external_gene_name) %>% unlist() %>% unique() %>% c()
+goe <- c(atg_goe, "Hspa2", "Lamp2", "Lc3a", "Casp3", "Lc3a", "Ulk4", "Cdkn2a", "Becn1")
+
+aut_sor <- sor %>% dplyr::filter(external_gene_name %in% goe) %>%
+           dplyr::select(-est_counts, -eff_len) %>%
+           pivot_wider(names_from = sample,
+                       values_from = tpm) %>%
+           dplyr::arrange(external_gene_name)
+
+aut_sot <- sot %>% dplyr::filter(external_gene_name %in% goe) %>%
+           dplyr::rename("tpm" = est_counts) %>%
+           pivot_wider(names_from = sample,
+                       values_from = tpm) %>%
+           dplyr::arrange(external_gene_name)
+```
+
+```{r echo = FALSE}
+plot_dat <- function(plot_data, plot_data_1, gene_name) {
+
+   ggp0 <- ggplot2::ggplot(data = plot_data_1,
+                    aes(x = external_gene_name, y = log2(tpm))) +
+    ggplot2::geom_violin(aes(colour = external_gene_name)) +
+           ggplot2::geom_jitter(aes(colour = external_gene_name)) +
+    theme(axis.text.x = element_text(angle = -45)) +
+    ggtitle(gene_name)
+
+    ggp1 <- ggplot2::ggplot(data = plot_data,
+                    aes(x = ensembl_transcript_id, y = log2(tpm))) +
+    ggplot2::geom_violin(aes(colour = ensembl_transcript_id)) +
+           ggplot2::geom_jitter(aes(colour = ensembl_transcript_id)) +
+    theme(axis.text.x = element_text(angle = -45)) +
+    ggtitle(gene_name)
+
+    ggp2 <- ""
+    if(length(unique(unlist(plot_data$ensembl_transcript_id)))>1){
+      ggp2 <- ggplot2::ggplot(data = plot_data,
+                      aes(x = ensembl_transcript_id, y = log2(tpm))) +
+      ggplot2::geom_violin(aes(colour = ensembl_transcript_id)) +
+      theme(axis.text.x = element_text(angle = -45)) +
+      ggtitle(gene_name) +
+      ggplot2::facet_wrap(~TISSUE_ARM, ncol = 4)
+    }
+
+    max_gg3 <- log2(max(unlist(plot_data$tpm)))
+
+    ggp3 <- ggplot2::ggplot(data = plot_data,
+                  aes(x = TISSUE_ARM, y = log2(tpm))) +
+    ggplot2::geom_violin(aes(colour = TISSUE_ARM)) +
+    theme(axis.text.x = element_text(angle = -45)) +
+    ggsignif::geom_signif(comparisons = list(
+      c("N_LG", "N_STD"),
+      c("N_LG", "T_STD"),
+      c("N_STD", "T_STD")),
+      map_signif_level = function(p) sprintf("p = %.2g", p),
+      y_position = c(max_gg3+0.5, max_gg3+1, max_gg3+1.5)) +
+    ggtitle(gene_name) +
+    ggplot2::facet_wrap(~ensembl_transcript_id, ncol=4)
+
+    if(class(ggp2) %in% "list"){
+      return(list(ggp0, ggp1, ggp2, ggp3))
+    } else {
+      return(list(ggp0, ggp1, ggp3))
+    }
+}
+```
+
+## Plot Autophagy Transcripts Per Sample
+```{r echo = FALSE}
+u_aut <- unique(aut_sor$external_gene_name)
+for(x in 1:length(u_aut)){
+
+    aut_plot <- aut_sor %>%
+                dplyr::filter(external_gene_name %in% u_aut[x])
+              aut_plot <- aut_plot %>% dplyr::select(-target_id, -len, -ensembl_gene_id, -external_gene_name, -hsapiens_homolog_ensembl_gene, -hsapiens_homolog_associated_gene_name) %>%
+             pivot_longer(!ensembl_transcript_id,
+                          names_to = "sample", values_to = "tpm") %>%
+             dplyr::left_join(., metadata_tb[,c("sample", "TISSUE_ARM")]) %>%
+            dplyr::filter(!TISSUE_ARM %in% "T_LG")
+
+    aut_plot1 <- aut_sot %>%
+                dplyr::filter(external_gene_name %in% u_aut[x])
+          aut_plot1 <- aut_plot1 %>%
+             dplyr::select(-ensembl_gene_id) %>%
+             pivot_longer(!external_gene_name,
+                          names_to = "sample", values_to = "tpm") %>%
+             dplyr::left_join(., metadata_tb[,c("sample", "TISSUE_ARM")]) %>%
+            dplyr::filter(!TISSUE_ARM %in% "T_LG")
+    plot_list <- plot_dat(aut_plot, aut_plot1, u_aut[x])
+    print(plot_list)
+  }
+```

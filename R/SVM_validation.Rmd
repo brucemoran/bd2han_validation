@@ -1,0 +1,80 @@
+---
+title: "SVM Validation"
+author: "BM"
+date: "4/9/2021"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## Transcripts in BD2HAN Rat RNAseq Data
+
+```{r include=FALSE}
+load("../data/BD2HAN_2_RNAseqR/RData/BD2HAN_2.DE_ready.RData")
+load("../data/Tp53/BD2HAN_2.so.RData")
+sor <- so$obs_raw %>%
+       dplyr::mutate(ensembl_transcript_id = stringr::str_split(target_id, "\\.", simplify = TRUE)[, 1]) %>%
+       dplyr::left_join(., anno_tb, by = c("ensembl_transcript_id" = "target_id"))
+
+goe <- c("Amot", "Dnajc5", "Srsf3", "Slc16a1", "Dpysl2", "Casc3", "Otud4", "Map4", "Slc39a7", "Leo1", "Rnmt", "Srsf6", "Rrbp1", "Hnrnpc", "Dusp9", "Ctnna1", "Bin2", "Itsn1", "Crtc3", "Rras2", "Lrp2", "Stt3b", "Utf1", "PrLZ", "Smc3", "Arhgap17", "Dcp1a")
+svm_sor <- sor %>% dplyr::filter(external_gene_name %in% goe) %>%
+           dplyr::select(-est_counts, -eff_len) %>%
+           pivot_wider(names_from = sample,
+                       values_from = tpm) %>%
+           dplyr::arrange(external_gene_name)
+```
+
+```{r echo = FALSE}
+plot_dat <- function(plot_data, gene_name) {
+    ggp1 <- ggplot2::ggplot(data = plot_data,
+                    aes(x = ensembl_transcript_id, y = log2(tpm))) +
+    ggplot2::geom_violin(aes(colour = ensembl_transcript_id)) +
+           ggplot2::geom_jitter(aes(colour = ensembl_transcript_id)) +
+    theme(axis.text.x = element_text(angle = -45)) +
+    ggtitle(gene_name)
+
+    ggp2 <- ggplot2::ggplot(data = plot_data,
+                    aes(x = ensembl_transcript_id, y = log2(tpm))) +
+    ggplot2::geom_violin(aes(colour = ensembl_transcript_id)) +
+    theme(axis.text.x = element_text(angle = -45)) +
+    ggtitle(gene_name) +
+    ggplot2::facet_wrap(~TISSUE_ARM, ncol = 4)
+
+    ggp3 <- ggplot2::ggplot(data = plot_data,
+                  aes(x = TISSUE_ARM, y = log2(tpm))) +
+    ggplot2::geom_violin(aes(colour = TISSUE_ARM)) +
+    theme(axis.text.x = element_text(angle = -45)) +
+    ggsignif::geom_signif(comparisons = list(
+      c("N_LG", "N_STD"),
+      c("N_LG", "T_STD"),
+      c("N_STD", "T_STD")),
+      map_signif_level = function(p) sprintf("p = %.2g", p),
+      y_position = c(14, 16, 18)) +
+    ggtitle(gene_name) +
+    ggplot2::facet_wrap(~ensembl_transcript_id, ncol=4)
+
+    return(list(ggp1, ggp2, ggp3))
+}
+```
+
+## Plot SVM Transcripts Per Sample
+```{r echo = FALSE}
+u_svm <- unique(svm_sor$external_gene_name)
+for(x in 1:length(u_svm)){
+
+    svm_plot <- svm_sor %>%
+                dplyr::filter(external_gene_name %in% u_svm[x])
+              svm_plot <- svm_plot %>% dplyr::select(-target_id, -len, -ensembl_gene_id, -external_gene_name, -hsapiens_homolog_ensembl_gene, -hsapiens_homolog_associated_gene_name) %>%
+             pivot_longer(!ensembl_transcript_id,
+                          names_to = "sample", values_to = "tpm") %>%
+             dplyr::left_join(., metadata_tb[,c("sample", "TISSUE_ARM")]) %>%
+            dplyr::filter(!TISSUE_ARM %in% "T_LG")
+
+    plot_list <- plot_dat(svm_plot, u_svm[x])
+    print(plot_list)
+  }
+```

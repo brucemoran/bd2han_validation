@@ -1,0 +1,210 @@
+---
+title: BD2HAN Rat RNAseq Deconvolution
+output:
+  html_document: default
+---
+
+### **Overview**
+
+Data was processed using Nextflow 'brucemoran/RNAseq_kallisto' and 'brucemoran/aracne-ap_viper' pipelines. `Sleuth` objects were parsed using scripts available in this project to generate RData files used in this document.
+
+```{r echo = FALSE, include = FALSE, message = FALSE, warning = FALSE}
+##working dir is location of Rmd, here BM/deconv
+load("../data/BD2HAN_2_RNAseqR/RData/BD2HAN_2.DE_ready.RData")
+load("../data/ARACNe/BD2HAN_2.parse_inputs.RData")
+metadata <- readr::read_csv("../data/metadata/BDII_Han_Rat2_metadata.TISSUE_ARM_immune_090321.csv")
+
+```
+
+### **Data formatting**
+
+We require HGNC (human) annotations for use in the [`immunedeconv` R package](https://github.com/icbi-lab/immunedeconv). This allows us to run 4 deconvolution methods: `quantiseq`, `mcp_counter`, `xcell` and `epic`.
+
+```{r echo = FALSE, include = FALSE, message = FALSE, warning = FALSE}
+library(immunedeconv)
+library(tidyverse)
+library(ComplexHeatmap)
+
+outdir <- "output/deconv"
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+if(!file.exists(paste0(outdir,"/deconv.RData"))){
+  tpm_tb_h <- dplyr::select(.data = tpm_tb, -external_gene_name) %>%
+              dplyr::left_join(tx2gene, .) %>%
+              dplyr::select(-target_id , -ensembl_gene_id, -external_gene_name) %>%
+              dplyr::distinct() %>%
+              na.omit() %>%
+              dplyr::filter(!hsapiens_homolog_associated_gene_name %in% "")
+
+  ##unique names
+  tpm_tb_hn <- names(which(table(tpm_tb_h$hsapiens_homolog_associated_gene_name)==1))
+
+  tpm_tb_h_gat <- RNAseqon::group_agg_two(f = tpm_tb_h, pattern="R") %>%
+                  dplyr::filter(hsapiens_homolog_associated_gene_name %in% !!tpm_tb_hn) %>%
+                  dplyr::select(-hsapiens_homolog_ensembl_gene) %>%
+                  as.data.frame() %>%
+                  tibble::column_to_rownames("hsapiens_homolog_associated_gene_name")
+
+  deconv_list <- list(1:4)
+  deconv_list[[1]] <- immunedeconv::deconvolute(tpm_tb_h_gat, "quantiseq", tumor = TRUE)
+  deconv_list[[2]] <- immunedeconv::deconvolute(tpm_tb_h_gat, "mcp_counter", tumor = TRUE)
+  deconv_list[[3]] <- immunedeconv::deconvolute(tpm_tb_h_gat, "xcell", tumor = TRUE)
+  deconv_list[[4]] <- immunedeconv::deconvolute(tpm_tb_h_gat, "epic", tumor = TRUE)
+  names(deconv_list) <- c("quantiseq", "mcp_counter", "xcell", "epic")
+
+  ##plot list
+  plot_list <- lapply(seq_along(deconv_list), function(f){
+
+    decon_char <- deconv_list[[f]] %>%
+                  dplyr::filter(!cell_type %in% "uncharacterized cell")
+
+    ggp <- decon_char %>%
+      dplyr::filter(!cell_type %in% "uncharacterized cell") %>%
+      gather(sample, fraction, -cell_type) %>%
+      # plot as stacked bar chart
+      ggplot(aes(x = sample, y = fraction, fill = cell_type)) +
+        geom_bar(stat = 'identity') +
+        coord_flip() +
+        scale_x_discrete(limits = rev(levels(decon_char))) +
+        ggtitle(paste0("Deconvolution with: ", names(deconv_list)[f]),
+                subtitle = "uncharacterised cells removed")
+
+
+    res_m <- as.matrix(decon_char[,-1])
+    rownames(res_m) <- unlist(decon_char[,1])
+
+    ##metadata to correct format and cols for annotation
+    metadat_df <- metadata %>% dplyr::filter(sample %in% colnames(res_m)) %>%
+                            dplyr::arrange(match(sample, colnames(res_m))) %>%
+                            dplyr::select(sample, IMMUNE, TUMOUR_TYPE, TISSUE, CARE_ARM) %>%
+                            as.data.frame(stringsAsFactors = TRUE) %>%
+                            tibble::column_to_rownames("sample") %>%
+                            dplyr::mutate(across(everything(), factor))
+
+    ##annotation for heatmap
+    hann <- HeatmapAnnotation(df = metadat_df, na_col = "white",
+                              col = list(IMMUNE = c("EXCL" = "orange", "HIGH" = "darkred",
+                                                  "LOW" = "dodgerblue", "MED" = "grey",
+                                                  "RICH" = "red", "POOR" = "lightblue"),
+                                         TUMOUR_TYPE = c("ENDO" = "forestgreen", "NOT" = "white",
+                                                  "SER" = "yellow", "SQC" = "pink"),
+                                         TISSUE = c("N" = "green", "T" = "black"),
+                                         CARE_ARM = c("LG" = "orange", "STD" = "blue")))
+
+    hmp <- Heatmap(res_m,
+                   name = names(deconv_list)[f],
+                   column_names_gp = gpar(fontsize = 10),
+                   bottom_annotation = hann,
+                   column_title =  paste0("Deconvolution using: ", names(deconv_list)[f]))
+
+    return(list(barplot = ggp, heatmap = hmp, heatmap_data = res_m))
+  })
+  names(plot_list) <- names(deconv_list)
+  save(deconv_list, plot_list, tpm_tb_h, tpm_tb_hn, tpm_tb_h_gat,
+       file = paste0(outdir,"/deconv.RData"))
+} else {
+  load(paste0(outdir,"/deconv.RData"))
+}
+```
+******
+\newpage
+
+## **BD2HAN Validation Data : Plots**
+
+```{r echo = FALSE, message = FALSE, warning = FALSE, fig.width = 12, fig.height = 10, comment = NA}
+lapply(plot_list, function(f){
+  f[2][[1]]
+})
+```
+
+BD2Han_1 Data generated by Nextflow 'RNAseq_kallisto' into 'Sleuth' object (so)
+
+```{r echo = FALSE, include = FALSE, message = FALSE, warning = FALSE}
+##working dir is location of Rmd, here BM/deconv
+load("../data/BD2HAN_1_data/sleuthObject.full.RData")
+ls()
+so_t <- RNAseqon::so_obs_raw_out(so)
+tpm_tb_1 <- so_t$obs_raw_tpm$wide[,-3]
+tpm_tb_1_h <- dplyr::select(.data = tpm_tb_1, -external_gene_name) %>%
+              dplyr::left_join(tx2gene, .) %>%
+              dplyr::select(-target_id , -ensembl_gene_id, -external_gene_name) %>%
+              dplyr::distinct() %>%
+              na.omit() %>%
+              dplyr::filter(!hsapiens_homolog_associated_gene_name %in% "")
+
+##unique names
+nn <- names(which(table(tpm_tb_1_h$hsapiens_homolog_associated_gene_name)>1))
+
+tpm_tb_1_h_gat <- RNAseqon::group_agg_two(f = tpm_tb_1_h, pattern = "hsapiens") %>%
+                  dplyr::filter(!hsapiens_homolog_associated_gene_name %in% nn) %>%
+                  dplyr::select(-hsapiens_homolog_ensembl_gene) %>%
+                  dplyr::distinct() %>%
+                  as.data.frame() %>%
+                  tibble::column_to_rownames("hsapiens_homolog_associated_gene_name")
+
+deconv_list_1 <- list(1:4)
+deconv_list_1[[1]] <- immunedeconv::deconvolute(tpm_tb_1_h_gat, "quantiseq", tumor = TRUE)
+deconv_list_1[[2]] <- immunedeconv::deconvolute(tpm_tb_1_h_gat, "mcp_counter", tumor = TRUE)
+deconv_list_1[[3]] <- immunedeconv::deconvolute(tpm_tb_1_h_gat, "xcell", tumor = TRUE)
+deconv_list_1[[4]] <- immunedeconv::deconvolute(tpm_tb_1_h_gat, "epic", tumor = TRUE)
+names(deconv_list_1) <- c("quantiseq", "mcp_counter", "xcell", "epic")
+
+##plot list
+plot_list_1 <- lapply(seq_along(deconv_list_1), function(f){
+
+  decon_char <- deconv_list_1[[f]] %>%
+                dplyr::filter(!cell_type %in% "uncharacterized cell")
+
+  ggp <- decon_char %>%
+    dplyr::filter(!cell_type %in% "uncharacterized cell") %>%
+    gather(sample, fraction, -cell_type) %>%
+    # plot as stacked bar chart
+    ggplot(aes(x = sample, y = fraction, fill = cell_type)) +
+      geom_bar(stat = 'identity') +
+      coord_flip() +
+      scale_x_discrete(limits = rev(levels(decon_char))) +
+      ggtitle(paste0("Deconvolution with: ", names(deconv_list_1)[f]),
+              subtitle = "uncharacterised cells removed")
+
+
+  res_m <- as.matrix(decon_char[,-1])
+  rownames(res_m) <- unlist(decon_char[,1])
+
+  ##metadata to correct format and cols for annotation
+  metadat_df <- metadata %>% dplyr::filter(sample %in% colnames(res_m)) %>%
+                          dplyr::filter(Tissue %in% "Normal",
+                                        Intervention %in% c("RES", "LIR")) %>%
+                          dplyr::arrange(match(sample, colnames(res_m))) %>%
+                          dplyr::select(sample, Tissue, Diet, Intervention) %>%
+                          as.data.frame(stringsAsFactors = TRUE) %>%
+                          tibble::column_to_rownames("sample") %>%
+                          dplyr::mutate(across(everything(), factor))
+
+  ##annotation for heatmap
+  hann <- HeatmapAnnotation(df = metadat_df, na_col = "white",
+                            col = list(Intervention = c("LIR" = "orange", "RES" = "blue")))
+  res_m <- res_m[,colnames(res_m) %in% rownames(metadat_df)]
+  hmp <- Heatmap(res_m,
+                 name = names(deconv_list_1)[f],
+                 column_names_gp = gpar(fontsize = 10),
+                 bottom_annotation = hann,
+                 column_title =  paste0("Deconvolution using: ", names(deconv_list_1)[f]))
+
+  return(list(barplot = ggp, heatmap = hmp, heatmap_data = res_m))
+})
+names(plot_list_1) <- names(deconv_list_1)
+save(deconv_list_1, plot_list_1, tpm_tb_1_h, tpm_tb_1_h_gat,
+     file = paste0(outdir,"/deconv_1.RData"))
+```
+
+******
+
+\newpage
+
+## **BD2HAN Initital Dataset : Plots**
+
+```{r echo = FALSE, message = FALSE, warning = FALSE, fig.width = 12, fig.height = 10, comment = NA}
+lapply(plot_list_1, function(f){
+  f[2][[1]]
+})
+```
